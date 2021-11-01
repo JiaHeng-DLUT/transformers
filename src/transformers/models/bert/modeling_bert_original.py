@@ -262,40 +262,34 @@ class BertSelfAttention(nn.Module):
         encoder_attention_mask=None,
         past_key_value=None,
         output_attentions=False,
-        qkv=None,
-        return_qkv=False
     ):
-        if qkv is None:
-            mixed_query_layer = self.query(hidden_states)
+        mixed_query_layer = self.query(hidden_states)
 
-            # If this is instantiated as a cross-attention module, the keys
-            # and values come from an encoder; the attention mask needs to be
-            # such that the encoder's padding tokens are not attended to.
-            is_cross_attention = encoder_hidden_states is not None
+        # If this is instantiated as a cross-attention module, the keys
+        # and values come from an encoder; the attention mask needs to be
+        # such that the encoder's padding tokens are not attended to.
+        is_cross_attention = encoder_hidden_states is not None
 
-            if is_cross_attention and past_key_value is not None:
-                # reuse k,v, cross_attentions
-                key_layer = past_key_value[0]
-                value_layer = past_key_value[1]
-                attention_mask = encoder_attention_mask
-            elif is_cross_attention:
-                key_layer = self.transpose_for_scores(self.key(encoder_hidden_states))
-                value_layer = self.transpose_for_scores(self.value(encoder_hidden_states))
-                attention_mask = encoder_attention_mask
-            elif past_key_value is not None:
-                key_layer = self.transpose_for_scores(self.key(hidden_states))
-                value_layer = self.transpose_for_scores(self.value(hidden_states))
-                key_layer = torch.cat([past_key_value[0], key_layer], dim=2)
-                value_layer = torch.cat([past_key_value[1], value_layer], dim=2)
-            else:
-                key_layer = self.transpose_for_scores(self.key(hidden_states))
-                value_layer = self.transpose_for_scores(self.value(hidden_states))
+        if is_cross_attention and past_key_value is not None:
+            # reuse k,v, cross_attentions
+            key_layer = past_key_value[0]
+            value_layer = past_key_value[1]
+            attention_mask = encoder_attention_mask
+        elif is_cross_attention:
+            key_layer = self.transpose_for_scores(self.key(encoder_hidden_states))
+            value_layer = self.transpose_for_scores(self.value(encoder_hidden_states))
+            attention_mask = encoder_attention_mask
+        elif past_key_value is not None:
+            key_layer = self.transpose_for_scores(self.key(hidden_states))
+            value_layer = self.transpose_for_scores(self.value(hidden_states))
+            key_layer = torch.cat([past_key_value[0], key_layer], dim=2)
+            value_layer = torch.cat([past_key_value[1], value_layer], dim=2)
+        else:
+            key_layer = self.transpose_for_scores(self.key(hidden_states))
+            value_layer = self.transpose_for_scores(self.value(hidden_states))
 
-            query_layer = self.transpose_for_scores(mixed_query_layer)  # (b, num_heads, N, head_size)
-            qkv = (query_layer, key_layer, value_layer)
-            if return_qkv:
-                return qkv
-        (query_layer, key_layer, value_layer) = qkv
+        query_layer = self.transpose_for_scores(mixed_query_layer)
+
         if self.is_decoder:
             # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
             # Further calls to cross_attention layer can then reuse all cross-attention
@@ -402,8 +396,6 @@ class BertAttention(nn.Module):
         encoder_attention_mask=None,
         past_key_value=None,
         output_attentions=False,
-        qkv=None,
-        return_qkv=False
     ):
         self_outputs = self.self(
             hidden_states,
@@ -413,12 +405,7 @@ class BertAttention(nn.Module):
             encoder_attention_mask,
             past_key_value,
             output_attentions,
-            qkv=qkv,
-            return_qkv=return_qkv
         )
-        if return_qkv:
-            qkv = self_outputs
-            return qkv
         attention_output = self.output(self_outputs[0], hidden_states)
         outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs
@@ -477,8 +464,6 @@ class BertLayer(nn.Module):
         encoder_attention_mask=None,
         past_key_value=None,
         output_attentions=False,
-        qkv=None,
-        return_qkv=False
     ):
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
@@ -488,14 +473,7 @@ class BertLayer(nn.Module):
             head_mask,
             output_attentions=output_attentions,
             past_key_value=self_attn_past_key_value,
-            qkv=qkv,
-            return_qkv=return_qkv
         )
-        
-        if return_qkv:
-            qkv = self_attention_outputs
-            return qkv
-
         attention_output = self_attention_outputs[0]
 
         # if decoder, the last output is tuple of self-attn cache
@@ -928,8 +906,6 @@ class BertModel(BertPreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
-        encoder_outputs=None,
-        return_embedding_output=False,
     ):
         r"""
         encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
@@ -951,89 +927,84 @@ class BertModel(BertPreTrainedModel):
             If set to :obj:`True`, :obj:`past_key_values` key value states are returned and can be used to speed up
             decoding (see :obj:`past_key_values`).
         """
-        if encoder_outputs is None:
-            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-            output_hidden_states = (
-                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-            )
-            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-            if self.config.is_decoder:
-                use_cache = use_cache if use_cache is not None else self.config.use_cache
+        if self.config.is_decoder:
+            use_cache = use_cache if use_cache is not None else self.config.use_cache
+        else:
+            use_cache = False
+
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        elif input_ids is not None:
+            input_shape = input_ids.size()
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+        batch_size, seq_length = input_shape
+        device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+        # past_key_values_length
+        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+
+        if attention_mask is None:
+            attention_mask = torch.ones(((batch_size, seq_length + past_key_values_length)), device=device)
+
+        if token_type_ids is None:
+            if hasattr(self.embeddings, "token_type_ids"):
+                buffered_token_type_ids = self.embeddings.token_type_ids[:, :seq_length]
+                buffered_token_type_ids_expanded = buffered_token_type_ids.expand(batch_size, seq_length)
+                token_type_ids = buffered_token_type_ids_expanded
             else:
-                use_cache = False
+                token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
 
-            if input_ids is not None and inputs_embeds is not None:
-                raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-            elif input_ids is not None:
-                input_shape = input_ids.size()
-            elif inputs_embeds is not None:
-                input_shape = inputs_embeds.size()[:-1]
-            else:
-                raise ValueError("You have to specify either input_ids or inputs_embeds")
+        # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
+        # ourselves in which case we just need to make it broadcastable to all heads.
+        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape, device)
 
-            batch_size, seq_length = input_shape
-            device = input_ids.device if input_ids is not None else inputs_embeds.device
+        # If a 2D or 3D attention mask is provided for the cross-attention
+        # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
+        if self.config.is_decoder and encoder_hidden_states is not None:
+            encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
+            encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
+            if encoder_attention_mask is None:
+                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)
+            encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
+        else:
+            encoder_extended_attention_mask = None
 
-            # past_key_values_length
-            past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+        # Prepare head mask if needed
+        # 1.0 in head_mask indicate we keep the head
+        # attention_probs has shape bsz x n_heads x N x N
+        # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
+        # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
+        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-            if attention_mask is None:
-                attention_mask = torch.ones(((batch_size, seq_length + past_key_values_length)), device=device)
-
-            if token_type_ids is None:
-                if hasattr(self.embeddings, "token_type_ids"):
-                    buffered_token_type_ids = self.embeddings.token_type_ids[:, :seq_length]
-                    buffered_token_type_ids_expanded = buffered_token_type_ids.expand(batch_size, seq_length)
-                    token_type_ids = buffered_token_type_ids_expanded
-                else:
-                    token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
-
-            # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
-            # ourselves in which case we just need to make it broadcastable to all heads.
-            extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape, device)
-
-            # If a 2D or 3D attention mask is provided for the cross-attention
-            # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
-            if self.config.is_decoder and encoder_hidden_states is not None:
-                encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
-                encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
-                if encoder_attention_mask is None:
-                    encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)
-                encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
-            else:
-                encoder_extended_attention_mask = None
-
-            # Prepare head mask if needed
-            # 1.0 in head_mask indicate we keep the head
-            # attention_probs has shape bsz x n_heads x N x N
-            # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
-            # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-            head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
-
-            embedding_output = self.embeddings(
-                input_ids=input_ids,
-                position_ids=position_ids,
-                token_type_ids=token_type_ids,
-                inputs_embeds=inputs_embeds,
-                past_key_values_length=past_key_values_length,
-            )
-
-            if return_embedding_output:
-                return (embedding_output, attention_mask, head_mask, encoder_hidden_states, encoder_extended_attention_mask, past_key_values, use_cache, output_attentions, output_hidden_states, return_dict)
-
-            encoder_outputs = self.encoder(
-                embedding_output,
-                attention_mask=extended_attention_mask,
-                head_mask=head_mask,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_attention_mask=encoder_extended_attention_mask,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+        embedding_output = self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            token_type_ids=token_type_ids,
+            inputs_embeds=inputs_embeds,
+            past_key_values_length=past_key_values_length,
+        )
+        encoder_outputs = self.encoder(
+            embedding_output,
+            attention_mask=extended_attention_mask,
+            head_mask=head_mask,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_extended_attention_mask,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
